@@ -58,3 +58,21 @@ The project is structured as follows:
 
 - **Model:** You can change the pre-trained model used in the `__init__` function.
 - **Training Parameters:** Modify the `TrainingArguments` object in the `train_from_csv` method.
+
+## Usage
+
+### Training the Model
+
+For Training, use this curl commannd 
+
+```bash
+curl -X GET http://localhost:5000/train
+```
+
+### Classifying
+
+For classifying the snippets, use a POST request,
+
+```bash
+curl -X POST http://localhost:5000/evaluate \ -H "Content-Type: application/json" \ -d '{"snippet":"This policy aims to minimize data collection, restrict data storage to a limited period, and ensure user rights to access and remove data. This data collection purpose is clearly defined and complies with GDPR regulations. "}'
+```
