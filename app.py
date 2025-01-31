@@ -14,7 +14,7 @@ app = Flask(__name__)
 nlp = spacy.load("en_core_web_sm")
 
 class ComplianceEvaluator:
-    def __init__(self, model_name: str = "bert-base-uncased"):
+    def __init__(self, model_name: str = "bert-base-uncased"): #used bert here instead of DistlBERT/RoBERTa just to strike the right balance between training time, learning loss and also more suited for this type of classification.
         self.model_name = model_name
         self.tokenizer = None
         self.model = None
@@ -32,7 +32,7 @@ class ComplianceEvaluator:
         if self.model is None:
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             self.model = AutoModelForSequenceClassification.from_pretrained(self.model_name, num_labels=3)
-            self.model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
+            # self.model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu")) Mine doesn't supports
 
     def evaluate_snippet(self, snippet: str):
         self.load_model()  # Lazy load the model when needed
@@ -69,7 +69,7 @@ class ComplianceEvaluator:
             eval_strategy="epoch",
             save_strategy="epoch",
             load_best_model_at_end=True,
-            learning_rate=2e-5,
+            learning_rate=2e-5, #a even smaller rate might be better, but who knows the time will be
         )
 
         trainer = Trainer(
