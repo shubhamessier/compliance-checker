@@ -1,163 +1,109 @@
-import pandas as pd
-import numpy as np
-from transformers import AutoTokenizer, AutoModelForSequenceClassification, TrainingArguments, Trainer
-from sklearn.model_selection import train_test_split
+from flask import Flask, request, jsonify
 import torch
-import logging
-from typing import List, Dict, Tuple
-import spacy
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import pandas as pd
+from sklearn.model_selection import train_test_split
 from datasets import Dataset
+from transformers import TrainingArguments, Trainer
+import spacy
 
-# Suppress unnecessary warnings
-logging.getLogger("transformers").setLevel(logging.ERROR)
+# Initialize Flask app
+app = Flask(__name__)
 
-# Load spaCy model for text preprocessing
+# Load spaCy model for text preprocessing only once
 nlp = spacy.load("en_core_web_sm")
 
-csv_path = "policy_data.csv"
-
 class ComplianceEvaluator:
-
     def __init__(self, model_name: str = "bert-base-uncased"):
-       
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModelForSequenceClassification.from_pretrained(
-            model_name, 
-            num_labels=3  # Ensure it matches label count
-        )
+        self.model_name = model_name
+        self.tokenizer = None
+        self.model = None
         self.id2label = {0: "Compliant", 1: "Partially Compliant", 2: "Non-Compliant"}
         self.label2id = {"Compliant": 0, "Partially Compliant": 1, "Non-Compliant": 2}
-    
-    def load_csv_data(self, file_path: str) -> Tuple[List[str], List[int]]:
-        """
-        Load CSV file and preprocess labels correctly.
-        """
-        # Read CSV file
-        df = pd.read_csv(file_path)
+        self.prompt_templates = [
+            "Evaluate if the following policy complies with GDPR regulations, considering data minimization, storage limitation, purpose limitation, and user rights. Identify specific areas of compliance or non-compliance.\n\nPolicy:\n{policy_text}\n\nCompliance Analysis:",
+            "Assess the following policy against GDPR regulations, focusing on Article 5 (principles) and Article 13 (transparency). Identify specific violations or compliances.\n\nPolicy:\n{policy_text}\n\nCompliance Analysis:",
+            "Identify potential issues related to purpose limitation and storage limitation in the following policy, providing a rationale based on GDPR requirements.\n\nPolicy:\n{policy_text}\n\nIssues and Rationale:",
+            "Does this policy adhere to the GDPR's storage limitation principle? Is the purpose of data collection clearly defined and legitimate? Does the policy respect user rights to data access, rectification, and removal? Answer based on the following policy:\n\nPolicy:\n{policy_text}\n\nCompliance Check:",
+            "Step 1: Identify the purposes for data collection stated in the following policy. Step 2: Determine if the stated purpose is explicit and legitimate under GDPR. Step 3: Evaluate if the data is stored for any longer than the purpose limitation dictates. Step 4: Is there a clear process for users to request data removal and correction?\n\nPolicy:\n{policy_text}\n\nAnalysis:"
+        ]
 
-        # Debugging: Print unique labels in CSV
-        print("Unique Labels in CSV (Before Cleaning):", df['label'].unique())
+    def load_model(self):
+        if self.model is None:
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            self.model = AutoModelForSequenceClassification.from_pretrained(self.model_name, num_labels=3)
+            self.model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
 
-        # Normalize labels: Remove spaces & trailing quotes
+    def evaluate_snippet(self, snippet: str):
+        self.load_model()  # Lazy load the model when needed
+        combined_prompt = "\n\n".join([template.format(policy_text=snippet) for template in self.prompt_templates])
+        
+        inputs = self.tokenizer(combined_prompt, return_tensors="pt", truncation=True, padding=True)
+        inputs = {key: value.to(self.model.device) for key, value in inputs.items()}  # Move inputs to GPU if available
+
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+        probs = torch.softmax(outputs.logits, dim=1)
+        predicted_class = torch.argmax(outputs.logits, dim=1).item()
+        confidence = probs[0][predicted_class].item()
+
+        return {"classification": self.id2label[predicted_class], "confidence": confidence}
+
+    def train_from_csv(self, csv_path: str = "policy_data.csv", test_size: float = 0.2, output_dir: str = "compliance-model"):
+        self.load_model()  # Ensure model and tokenizer are initialized
+
+        df = pd.read_csv(csv_path)
         df['label'] = df['label'].astype(str).str.strip().str.replace('"', '')
-
-        # Debugging: Print cleaned labels
-        print("Unique Labels in CSV (After Cleaning):", df['label'].unique())
-
-        # Convert labels to numeric values using label2id mapping
         texts = df['snippet'].tolist()
         labels = [self.label2id[label] for label in df['label']]
+        train_texts, val_texts, train_labels, val_labels = train_test_split(texts, labels, test_size=test_size, random_state=42)
 
-        return texts, labels
-    
-    def prepare_training_data(self, texts: List[str], labels: List[int]) -> Dataset:
-        """
-        Tokenizes text and prepares dataset for training.
-        """
-        encoded_data = self.tokenizer(
-            texts,
-            padding=True,
-            truncation=True,
-            max_length=512,
-            return_tensors="pt"
-        )
-        
-        dataset = Dataset.from_dict({
-            "input_ids": encoded_data["input_ids"],
-            "attention_mask": encoded_data["attention_mask"],
-            "labels": labels
-        })
-        
-        return dataset
-
-    def train_from_csv(self, csv_path: str, test_size: float = 0.2, output_dir: str = "compliance-model"):
-        """
-        Train model using CSV data.
-        """
-        # Load data from CSV
-        texts, labels = self.load_csv_data(csv_path)
-        
-        # Split into training and validation sets
-        train_texts, val_texts, train_labels, val_labels = train_test_split(
-            texts, labels, test_size=test_size, random_state=42
-        )
-        
-        # Prepare datasets
         train_dataset = self.prepare_training_data(train_texts, train_labels)
         val_dataset = self.prepare_training_data(val_texts, val_labels)
-        
-        # Configure training arguments
+
         training_args = TrainingArguments(
             output_dir=output_dir,
             num_train_epochs=3,
             per_device_train_batch_size=8,
             per_device_eval_batch_size=8,
-            eval_strategy="epoch",  # Fixed deprecated `evaluation_strategy`
+            eval_strategy="epoch",
             save_strategy="epoch",
             load_best_model_at_end=True,
             learning_rate=2e-5,
-            logging_dir=f"{output_dir}/logs",
-            logging_steps=10,
         )
-        
-        # Initialize and start training
+
         trainer = Trainer(
             model=self.model,
             args=training_args,
             train_dataset=train_dataset,
             eval_dataset=val_dataset,
         )
-        
+
         trainer.train()
-        
-        # Save the final model
         trainer.save_model(output_dir)
         self.tokenizer.save_pretrained(output_dir)
-        
-        # Return validation metrics
-        metrics = trainer.evaluate()
-        return metrics
+        return trainer.evaluate()
 
-    def evaluate_snippet(self, snippet: str) -> Dict:
-        """
-        Evaluate a single policy snippet and classify its compliance level.
-        """
-        inputs = self.tokenizer(snippet, return_tensors="pt", truncation=True)
-        outputs = self.model(**inputs)
-        
-        # Get predicted class and confidence score
-        probs = torch.softmax(outputs.logits, dim=1)
-        predicted_class = torch.argmax(outputs.logits, dim=1).item()
-        confidence = probs[0][predicted_class].item()
-        
-        return {
-            "classification": self.id2label[predicted_class],
-            "confidence": confidence,
-            "snippet": snippet
-        }
+    def prepare_training_data(self, texts, labels):
+        encoded_data = self.tokenizer(texts, padding=True, truncation=True, max_length=512, return_tensors="pt")
+        dataset = Dataset.from_dict({"input_ids": encoded_data["input_ids"], "attention_mask": encoded_data["attention_mask"], "labels": labels})
+        return dataset
 
+# Initialize model evaluator (but model will not be loaded yet)
+evaluator = ComplianceEvaluator()
 
-def test_compliance_system():
-    
-    evaluator = ComplianceEvaluator()
-    print("\nTraining model...")
-    metrics = evaluator.train_from_csv(csv_path)
-    print(f"Training metrics: {metrics}")
-    
-    # Test evaluation on new snippets
-    test_snippets = [
-        "We encrypt all data using industry-standard protocols.",
-        "Data retention periods are flexible based on business needs.",
-        "No privacy policy is implemented."
-    ]
-    
-    print("\nTesting evaluations:")
-    for snippet in test_snippets:
-        result = evaluator.evaluate_snippet(snippet)
-        print(f"\nSnippet: {snippet}")
-        print(f"Classification: {result['classification']}")
-        print(f"Confidence: {result['confidence']:.2f}")
-        
+@app.route("/evaluate", methods=["POST"])
+def evaluate():
+    data = request.json
+    if "snippet" not in data:
+        return jsonify({"error": "Snippet is required"}), 400
+    result = evaluator.evaluate_snippet(data["snippet"])
+    return jsonify(result)
+
+@app.route("/train", methods=["GET"])
+def train():
+    metrics = evaluator.train_from_csv("policy_data.csv")
+    return jsonify(metrics)
 
 if __name__ == "__main__":
-    test_compliance_system()
+    app.run(host="0.0.0.0", port=5000, debug=True)
