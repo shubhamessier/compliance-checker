@@ -1,0 +1,41 @@
+{
+  "best_metric": 0.24213097989559174,
+  "best_model_checkpoint": "compliance-model/checkpoint-111",
+  "epoch": 1.0,
+  "eval_steps": 500,
+  "global_step": 111,
+  "is_hyper_param_search": false,
+  "is_local_process_zero": true,
+  "is_world_process_zero": true,
+  "log_history": [
+    {
+      "epoch": 1.0,
+      "eval_loss": 0.24213097989559174,
+      "eval_runtime": 26.1556,
+      "eval_samples_per_second": 8.449,
+      "eval_steps_per_second": 1.071,
+      "step": 111
+    }
+  ],
+  "logging_steps": 500,
+  "max_steps": 333,
+  "num_input_tokens_seen": 0,
+  "num_train_epochs": 3,
+  "save_steps": 500,
+  "stateful_callbacks": {
+    "TrainerControl": {
+      "args": {
+        "should_epoch_stop": false,
+        "should_evaluate": false,
+        "should_log": false,
+        "should_save": true,
+        "should_training_stop": false
+      },
+      "attributes": {}
+    }
+  },
+  "total_flos": 22637004005700.0,
+  "train_batch_size": 8,
+  "trial_name": null,
+  "trial_params": null
+}
